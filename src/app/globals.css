@@ -1,26 +1,61 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/**
+ * A deliberately plain palette. This is an internal management tool: the job of
+ * the styling is to make numbers legible and comparable, not to decorate.
+ */
+@theme {
+  --color-canvas: oklch(0.985 0.002 250);
+  --color-surface: oklch(1 0 0);
+  --color-line: oklch(0.91 0.004 250);
+  --color-ink: oklch(0.22 0.01 250);
+  --color-muted: oklch(0.52 0.012 250);
+  --color-accent: oklch(0.52 0.14 250);
+  --color-accent-soft: oklch(0.95 0.03 250);
+  --color-positive: oklch(0.52 0.13 155);
+  --color-positive-soft: oklch(0.95 0.04 155);
+  --color-negative: oklch(0.55 0.17 25);
+  --color-negative-soft: oklch(0.96 0.03 25);
+  --color-warn: oklch(0.62 0.13 75);
+  --color-warn-soft: oklch(0.96 0.04 75);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @theme {
+    --color-canvas: oklch(0.17 0.008 250);
+    --color-surface: oklch(0.21 0.009 250);
+    --color-line: oklch(0.3 0.012 250);
+    --color-ink: oklch(0.94 0.004 250);
+    --color-muted: oklch(0.68 0.012 250);
+    --color-accent: oklch(0.72 0.12 250);
+    --color-accent-soft: oklch(0.28 0.05 250);
+    --color-positive: oklch(0.74 0.15 155);
+    --color-positive-soft: oklch(0.27 0.05 155);
+    --color-negative: oklch(0.7 0.16 25);
+    --color-negative-soft: oklch(0.28 0.06 25);
+    --color-warn: oklch(0.78 0.13 75);
+    --color-warn-soft: oklch(0.29 0.05 75);
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/**
+ * Financial figures use tabular numerals so digits line up in a column and the
+ * eye can compare magnitudes down a table without reading every character.
+ */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Keep native form controls legible in dark mode. */
+input,
+select,
+textarea {
+  color-scheme: light dark;
 }
