@@ -72,6 +72,42 @@ describe("s3ConfigFromEnv", () => {
     Object.assign(process.env, saved);
   });
 
+  it("reads the AWS names that `fly storage create` sets automatically", () => {
+    const saved = { ...process.env };
+    for (const key of ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_REGION"]) {
+      delete process.env[key];
+    }
+    process.env.AWS_ENDPOINT_URL_S3 = "https://fly.storage.tigris.dev";
+    process.env.BUCKET_NAME = "swing-backups";
+    process.env.AWS_ACCESS_KEY_ID = "tid_key";
+    process.env.AWS_SECRET_ACCESS_KEY = "tsec_secret";
+
+    // Without this fallback the Fly deployment would look correctly configured
+    // while never uploading a single backup.
+    expect(s3ConfigFromEnv()).toMatchObject({
+      endpoint: "https://fly.storage.tigris.dev",
+      bucket: "swing-backups",
+      accessKeyId: "tid_key",
+    });
+    Object.assign(process.env, saved);
+  });
+
+  it("prefers explicit S3_* over the AWS fallback", () => {
+    const saved = { ...process.env };
+    process.env.S3_ENDPOINT = "https://explicit.example.com";
+    process.env.S3_BUCKET = "explicit";
+    process.env.S3_ACCESS_KEY_ID = "explicit-key";
+    process.env.S3_SECRET_ACCESS_KEY = "explicit-secret";
+    process.env.AWS_ENDPOINT_URL_S3 = "https://fallback.example.com";
+    process.env.BUCKET_NAME = "fallback";
+
+    expect(s3ConfigFromEnv()).toMatchObject({
+      endpoint: "https://explicit.example.com",
+      bucket: "explicit",
+    });
+    Object.assign(process.env, saved);
+  });
+
   it("strips a trailing slash so the signed path does not double up", () => {
     const saved = { ...process.env };
     process.env.S3_ENDPOINT = "https://fly.storage.tigris.dev/";

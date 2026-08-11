@@ -30,12 +30,20 @@ export interface S3Config {
  * is not configured. Returning null rather than throwing is deliberate: uploads
  * are opt-in, and a developer running a local backup should not need S3
  * credentials.
+ *
+ * TWO NAMING SCHEMES ARE ACCEPTED. `fly storage create` provisions a Tigris
+ * bucket and sets its own secrets on the app automatically, using the
+ * conventional AWS variable names. Reading those as a fallback means the Fly
+ * setup works with no manual re-mapping — and re-mapping by hand is exactly
+ * where a deployment silently ends up with backups that never upload.
+ *
+ * Explicit S3_* values win, so any provider can still be configured directly.
  */
 export function s3ConfigFromEnv(): S3Config | null {
-  const endpoint = process.env.S3_ENDPOINT;
-  const bucket = process.env.S3_BUCKET;
-  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
+  const endpoint = process.env.S3_ENDPOINT ?? process.env.AWS_ENDPOINT_URL_S3;
+  const bucket = process.env.S3_BUCKET ?? process.env.BUCKET_NAME;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY;
 
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null;
 
@@ -45,7 +53,7 @@ export function s3ConfigFromEnv(): S3Config | null {
     accessKeyId,
     secretAccessKey,
     // Tigris accepts "auto"; most other providers want a real region name.
-    region: process.env.S3_REGION ?? "auto",
+    region: process.env.S3_REGION ?? process.env.AWS_REGION ?? "auto",
   };
 }
 

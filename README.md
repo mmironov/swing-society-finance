@@ -151,12 +151,25 @@ fly auth login
 
 fly apps create swing-society-finance          # name must be globally unique
 fly volumes create swing_data --region fra --size 1
+```
 
-# Credentials go in secrets, never in fly.toml — that file is committed to git.
-fly secrets set AUTH_USER=swing AUTH_PASSWORD="$(openssl rand -base64 24)"
+Now the login password. **Generate it and save it somewhere first** — Fly stores secrets
+encrypted and will never show you a value again, only its name:
 
+```bash
+openssl rand -base64 24
+```
+
+Put that output in your password manager, then set it (credentials go in secrets, never in
+`fly.toml` — that file is committed to git):
+
+```bash
+fly secrets set AUTH_USER=swing AUTH_PASSWORD='<paste the generated password>'
 fly deploy
 ```
+
+If you lose the password it is not a disaster — you cannot read it back from Fly, but you can
+replace it by running `fly secrets set AUTH_PASSWORD='<new one>'` again.
 
 Afterwards, `fly deploy` alone ships a new version. TLS is terminated at Fly's edge and
 `force_https` redirects plain HTTP, which is what makes Basic auth safe here.
@@ -181,16 +194,35 @@ the volume. Set `min_machines_running = 1` if that ever annoys you.
 `BACKUP_DIR` points at `/data/backups` — the same volume as the database — so local snapshots alone
 would not survive losing that volume. Object storage closes that gap.
 
-Create a bucket and wire in the credentials it prints:
+```bash
+fly storage create
+```
+
+This provisions a Tigris bucket, prints the credentials **once**, and sets them as secrets on the
+app for you — under the conventional AWS names (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_ENDPOINT_URL_S3`, `BUCKET_NAME`). The backup script reads those directly, so **there is usually
+nothing further to configure**. Confirm with:
 
 ```bash
-fly storage create                       # provisions a Tigris bucket
+fly secrets list      # shows names and digests, never values
+```
+
+If the names differ from the above, map them explicitly — `S3_*` always takes precedence:
+
+```bash
 fly secrets set \
   S3_ENDPOINT=https://fly.storage.tigris.dev \
   S3_BUCKET=<bucket-name> \
   S3_ACCESS_KEY_ID=<key> \
   S3_SECRET_ACCESS_KEY=<secret> \
   S3_REGION=auto
+```
+
+Copy the printed credentials into your password manager as well. Then confirm uploads actually work
+rather than assuming — the run prints where it went:
+
+```bash
+fly ssh console -C "node /app/dist-scripts/backup.js"
 ```
 
 Every backup is then uploaded **after** it passes verification, so an unusable snapshot is never
