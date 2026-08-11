@@ -9,6 +9,7 @@ import {
   createOffering,
   deleteOffering,
   saveExpectedSales,
+  saveSeasonExpectedSales,
   saveManualForecastLine,
   saveTeacherCosts,
   updateOffering,
@@ -47,6 +48,9 @@ export async function addOfferingAction(formData: FormData): Promise<void> {
       minutesPerClass: hoursToMinutes(Number(formData.get("hoursPerClass") ?? 1.5)),
       studioHourlyRateCents: parseEurosToCents(String(formData.get("studioHourlyRate") ?? "")),
       status: "PLANNED",
+      // New offerings default to dedicated; the course planner switches them.
+      intakeMode: "DEDICATED",
+      poolShareBp: 0,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not add the course";
@@ -89,6 +93,10 @@ export async function saveCoursePlanAction(
       expectedStudents: integer(formData, "expectedStudents"),
       minutesPerClass: hoursToMinutes(Number(formData.get("hoursPerClass") ?? 0)),
       studioHourlyRateCents: parseEurosToCents(String(formData.get("studioHourlyRate") ?? "")),
+      intakeMode: formData.get("intakeMode") === "SHARED" ? "SHARED" : "DEDICATED",
+      // Percent in the form, basis points in storage — rounded rather than
+      // truncated so "33.33" survives the trip intact.
+      poolShareBp: Math.round((Number(formData.get("poolSharePercent")) || 0) * 100),
     });
 
     const sales = [...formData.entries()]
@@ -133,4 +141,39 @@ export async function saveForecastLineAction(formData: FormData): Promise<void> 
 
   revalidatePlanner();
   redirect(`/forecast?season=${seasonId}`);
+}
+
+/**
+ * Saves the season's shared subscription sales grid.
+ *
+ * Field names are `sale.<productId>.<YYYY-MM>`, so the whole products-by-months
+ * matrix arrives in one submission and replaces the stored plan wholesale.
+ */
+export async function saveSeasonSalesAction(
+  _previous: PlanSaveResult,
+  formData: FormData,
+): Promise<PlanSaveResult> {
+  const seasonId = integer(formData, "seasonId");
+  if (!seasonId) return { error: "Missing season" };
+
+  try {
+    const sales = [...formData.entries()]
+      .filter(([key]) => key.startsWith("sale."))
+      .map(([key, value]) => {
+        const [, productId, month] = key.split(".");
+        return {
+          productId: Number(productId),
+          month,
+          quantity: Math.max(0, Math.round(Number(value) || 0)),
+        };
+      })
+      .filter((sale) => Number.isInteger(sale.productId) && /^\d{4}-\d{2}$/.test(sale.month));
+
+    saveSeasonExpectedSales(seasonId, sales);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not save the sales plan" };
+  }
+
+  revalidatePlanner();
+  return { savedAt: Date.now() };
 }

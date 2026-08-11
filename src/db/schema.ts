@@ -182,6 +182,28 @@ export const courseOfferings = sqliteTable(
     minutesPerClass: integer("minutes_per_class").notNull().default(90),
     /** Null means no studio cost has been planned for this offering yet. */
     studioHourlyRateCents: integer("studio_hourly_rate_cents"),
+    /**
+     * Where this offering's subscription revenue comes from.
+     *
+     * DEDICATED — students join for THIS course, so its own expected sales are
+     * its revenue. A beginners intake works this way.
+     *
+     * SHARED — students buy a subscription from the school and then choose what
+     * to attend, so the sale belongs to the season, not to any one course. The
+     * offering draws a percentage of the season pool instead.
+     *
+     * Defaults to DEDICATED so offerings planned before the pool existed keep
+     * behaving exactly as they did.
+     */
+    intakeMode: text("intake_mode", { enum: ["DEDICATED", "SHARED"] })
+      .notNull()
+      .default("DEDICATED"),
+    /**
+     * This offering's claim on the season pool, in basis points (10000 = 100%).
+     * Basis points rather than a percentage so no float ever touches a figure
+     * that money is derived from. Ignored unless intakeMode is SHARED.
+     */
+    poolShareBp: integer("pool_share_bp").notNull().default(0),
     status: text("status", { enum: ["PLANNED", "RUNNING", "FINISHED", "CANCELLED"] })
       .notNull()
       .default("PLANNED"),
@@ -199,7 +221,56 @@ export const courseOfferings = sqliteTable(
       "offerings_studio_rate_non_negative",
       sql`${table.studioHourlyRateCents} IS NULL OR ${table.studioHourlyRateCents} >= 0`,
     ),
+    // NO CHECK CONSTRAINT ON pool_share_bp, deliberately.
+    //
+    // SQLite cannot add a table-level CHECK to an existing table, so drizzle-kit
+    // emits a create-copy-drop-rename rebuild instead. That rebuild is unsafe
+    // here: it drops course_offerings, and the ON DELETE CASCADE from
+    // offering_expected_sales and offering_teacher_costs then deletes every
+    // course plan. The generated `PRAGMA foreign_keys=OFF` does not save it,
+    // because SQLite silently ignores that pragma inside a transaction and
+    // migrations run in one. Verified: adding this constraint destroyed 56
+    // expected-sale rows and 12 teacher-cost rows on a populated database.
+    //
+    // The range is enforced in the domain layer instead — allocatePool rejects
+    // any share outside 0..10000 — and this column is only ever written by the
+    // planner. See src/domain/planning/pool.ts.
     index("course_offerings_season_idx").on(table.seasonId),
+  ],
+);
+
+/* ------------------------------------------- season-level subscription sales */
+
+/**
+ * Subscription sales expected across a season, by product and by month.
+ *
+ * These are the sales that are NOT tied to one course: a student buys "two
+ * classes a week for two months" from the school and then decides what to
+ * attend. Recording them here rather than against an offering is what keeps a
+ * shared subscription from being falsely attributed to a single course.
+ *
+ * Keyed by month because the P&L is cash-basis — a subscription is recognised
+ * when it is bought, so planning by month is what lets the monthly forecast be
+ * compared against monthly actuals.
+ */
+export const seasonExpectedSales = sqliteTable(
+  "season_expected_sales",
+  {
+    seasonId: integer("season_id")
+      .notNull()
+      .references(() => seasons.id, { onDelete: "cascade" }),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => subscriptionProducts.id, { onDelete: "cascade" }),
+    /** ISO year-month, `YYYY-MM`. */
+    month: text("month").notNull(),
+    quantity: integer("quantity").notNull().default(0),
+  },
+  (table) => [
+    primaryKey({ columns: [table.seasonId, table.productId, table.month] }),
+    check("season_expected_sales_quantity_non_negative", sql`${table.quantity} >= 0`),
+    check("season_expected_sales_month_format", sql`${table.month} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'`),
+    index("season_expected_sales_season_idx").on(table.seasonId),
   ],
 );
 

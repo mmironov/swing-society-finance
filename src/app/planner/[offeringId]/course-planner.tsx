@@ -35,9 +35,13 @@ export interface CoursePlannerProps {
     studioHourlyRateCents: number | null;
     sales: Record<number, number>;
     teachers: { teacherId: number; classes: number; ratePerClassCents: number }[];
+    intakeMode: "DEDICATED" | "SHARED";
+    poolShareBp: number;
   };
   products: PlannerProduct[];
   teachers: PlannerTeacher[];
+  /** The season's shared pool, so a SHARED course can price its slice live. */
+  pool: { totalCents: number; otherSharesBp: number };
 }
 
 interface TeacherRow {
@@ -64,6 +68,7 @@ export function CoursePlanner({
   initial,
   products,
   teachers,
+  pool,
 }: CoursePlannerProps) {
   const [state, formAction, pending] = useActionState<PlanSaveResult, FormData>(
     saveCoursePlanAction,
@@ -79,6 +84,10 @@ export function CoursePlanner({
   const [sales, setSales] = useState<Record<number, string>>(() =>
     Object.fromEntries(products.map((product) => [product.id, String(initial.sales[product.id] ?? 0)])),
   );
+  const [intakeMode, setIntakeMode] = useState(initial.intakeMode);
+  const [poolSharePercent, setPoolSharePercent] = useState(
+    (initial.poolShareBp / 100).toString(),
+  );
   const [teacherRows, setTeacherRows] = useState<TeacherRow[]>(() =>
     initial.teachers.map((row, index) => ({
       key: `existing-${index}`,
@@ -90,6 +99,14 @@ export function CoursePlanner({
 
   const numeric = (value: string) => Math.max(0, Math.round(Number(value) || 0));
 
+  // Basis points, rounded rather than truncated so "33.33" survives intact.
+  const shareBp = Math.min(10_000, Math.max(0, Math.round((Number(poolSharePercent) || 0) * 100)));
+  // Integer arithmetic, floored — matching allocatePool on the server, so the
+  // figure shown here is the figure that gets stored. Rounding differently
+  // would make the preview disagree with the saved plan by a cent.
+  const allocatedCents = Math.floor((pool.totalCents * shareBp) / 10_000);
+  const totalSharesBp = pool.otherSharesBp + shareBp;
+
   const forecast = useMemo(() => {
     try {
       return forecastOffering(
@@ -100,6 +117,9 @@ export function CoursePlanner({
           weeks: numeric(weeks),
           capacity: numeric(capacity),
           expectedStudents: numeric(expectedStudents),
+          intakeMode,
+          poolShareBp: shareBp,
+          allocatedPoolCents: allocatedCents,
           expectedSales: products.map((product) => ({
             productId: product.id,
             quantity: numeric(sales[product.id] ?? "0"),
@@ -128,6 +148,9 @@ export function CoursePlanner({
       return null;
     }
   }, [
+    intakeMode,
+    shareBp,
+    allocatedCents,
     offeringId,
     courseName,
     classesPerWeek,
@@ -218,8 +241,80 @@ export function CoursePlanner({
 
           <Card
             title="Revenue assumptions"
-            subtitle="How many of each subscription you expect to sell for this course"
+            subtitle="Where this course's subscription revenue comes from"
           >
+            <div className="border-b border-line px-4 py-3">
+              <div className="flex rounded-md border border-line p-0.5">
+                {(
+                  [
+                    ["DEDICATED", "Sells its own subscriptions"],
+                    ["SHARED", "Shares the season pool"],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setIntakeMode(mode)}
+                    className={`flex-1 rounded px-3 py-1.5 text-sm font-medium transition ${
+                      intakeMode === mode ? "bg-accent-soft text-accent" : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <input type="hidden" name="intakeMode" value={intakeMode} />
+              <p className="mt-2 text-xs text-muted">
+                {intakeMode === "DEDICATED"
+                  ? "Students join for this course, so the sales below are its revenue. Right for a beginners intake."
+                  : "Students buy a pass from the school and choose what to attend, so this course takes a share of the season's shared sales."}
+              </p>
+            </div>
+
+            {intakeMode === "SHARED" ? (
+              <div className="space-y-3 px-4 py-4">
+                <Field label="Share of the season pool (%)">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.01}
+                    name="poolSharePercent"
+                    value={poolSharePercent}
+                    onChange={(event) => setPoolSharePercent(event.target.value)}
+                    className="w-28 text-right"
+                  />
+                </Field>
+
+                <dl className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-muted">Season pool</dt>
+                    <dd><Money cents={pool.totalCents} /></dd>
+                  </div>
+                  <div className="flex justify-between font-medium">
+                    <dt>Allocated to this course</dt>
+                    <dd className="text-positive"><Money cents={allocatedCents} /></dd>
+                  </div>
+                </dl>
+
+                {totalSharesBp !== 10_000 ? (
+                  <p className="rounded-md border border-negative-soft bg-negative-soft px-3 py-2 text-xs text-negative">
+                    Across the season, shares now total {(totalSharesBp / 100).toFixed(2)}%.{" "}
+                    {totalSharesBp > 10_000
+                      ? "That is more than the pool contains — saving this will be rejected."
+                      : "The remainder counts towards season revenue but towards no course's contribution."}
+                  </p>
+                ) : null}
+
+                <p className="text-xs text-muted">
+                  Enter the sales themselves on the{" "}
+                  <Link href={`/planner?season=${seasonId}`} className="text-accent underline">
+                    season planner
+                  </Link>
+                  .
+                </p>
+              </div>
+            ) : (
             <Table>
               <thead>
                 <tr>
@@ -270,6 +365,7 @@ export function CoursePlanner({
                 </tr>
               </tfoot>
             </Table>
+            )}
             <p className="border-t border-line px-4 py-2.5 text-xs text-muted">
               Expected sales are counted separately from expected students: one student may buy
               several subscriptions across a season.

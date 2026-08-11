@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Button, PageHeader } from "@/components/ui";
 import { formatDateRange } from "@/lib/format";
 import { describeProduct, listSubscriptionProducts, listTeachers } from "@/services/catalog";
-import { getOfferingPlan } from "@/services/planning";
+import { getOfferingPlan, getSeasonPool } from "@/services/planning";
 import { getSeason } from "@/services/seasons";
 
 import { deleteOfferingAction } from "../actions";
@@ -24,6 +24,7 @@ export default async function CoursePlanningPage({
   if (!plan) notFound();
 
   const season = getSeason(plan.offering.seasonId);
+  const pool = getSeasonPool(plan.offering.seasonId);
   if (!season) notFound();
 
   const products = listSubscriptionProducts();
@@ -63,6 +64,16 @@ export default async function CoursePlanningPage({
             classes: cost.classes,
             ratePerClassCents: cost.ratePerClassCents,
           })),
+          intakeMode: plan.offering.intakeMode,
+          poolShareBp: plan.offering.poolShareBp,
+        }}
+        pool={{
+          totalCents: pool.revenue.totalCents,
+          // Everyone else's claim, so this screen can warn when the season's
+          // shares would total more or less than 100%.
+          otherSharesBp: pool.allocations
+            .filter((allocation) => allocation.offeringId !== offeringId)
+            .reduce((sum, allocation) => sum + allocation.shareBp, 0),
         }}
         products={products.map((product) => ({
           id: product.id,

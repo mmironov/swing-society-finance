@@ -20,7 +20,11 @@ import { getDefaultSeason, listSeasons } from "@/services/seasons";
 
 import { AddOfferingForm } from "./add-offering";
 import { listCourses } from "@/services/catalog";
-import { listOfferings } from "@/services/planning";
+import { getSeasonExpectedSales, getSeasonPool, listOfferings } from "@/services/planning";
+import { listSubscriptionProducts } from "@/services/catalog";
+import { seasonMonths } from "@/domain/planning/pool";
+
+import { SeasonSalesGrid } from "./season-sales";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +55,10 @@ export default async function PlannerPage({
 
   const forecast = forecastForSeason(season.id);
   const offerings = listOfferings(season.id);
+  const products = listSubscriptionProducts();
+  const seasonSales = getSeasonExpectedSales(season.id);
+  const pool = getSeasonPool(season.id);
+  const sharedOfferings = offerings.filter((offering) => offering.intakeMode === "SHARED");
   const plannedCourseIds = new Set(offerings.map((offering) => offering.courseId));
   const availableCourses = listCourses().filter((course) => !plannedCourseIds.has(course.id));
 
@@ -78,6 +86,50 @@ export default async function PlannerPage({
         />
         <Kpi label="Profit margin" value={<Percent value={forecast.profitMargin} />} hint="Net profit ÷ revenue" />
       </div>
+
+      <Card
+        title="Shared subscription sales"
+        subtitle="Passes bought from the school rather than for one course — planned by the month they are sold"
+      >
+        <SeasonSalesGrid
+          seasonId={season.id}
+          months={seasonMonths(season.startDate, season.endDate)}
+          products={products.map((product) => ({
+            id: product.id,
+            name: product.name,
+            priceCents: product.priceCents,
+          }))}
+          initial={seasonSales}
+        />
+        <div className="border-t border-line px-4 py-3 text-sm text-muted">
+          {sharedOfferings.length === 0 ? (
+            <>
+              No course draws from this pool yet. Open a course below and set its intake to
+              <span className="text-ink"> shared</span> to give it a share.
+            </>
+          ) : pool.isOverAllocated ? (
+            <span className="text-negative">
+              Courses claim {(pool.totalShareBp / 100).toFixed(1)}% of this pool, which is more than
+              it holds. No course is being credited with pool revenue until the shares add up to
+              100% or less.
+            </span>
+          ) : pool.isFullyAllocated ? (
+            <>
+              Allocated across {sharedOfferings.length} course
+              {sharedOfferings.length === 1 ? "" : "s"}:{" "}
+              {sharedOfferings
+                .map((offering) => `${offering.courseName} ${(offering.poolShareBp / 100).toFixed(0)}%`)
+                .join(" · ")}
+            </>
+          ) : (
+            <span className="text-negative">
+              Shares total {(pool.totalShareBp / 100).toFixed(1)}%, leaving{" "}
+              {formatEur(pool.unallocatedCents)} unassigned to any course. It still counts towards
+              season revenue, but no course&rsquo;s contribution includes it.
+            </span>
+          )}
+        </div>
+      </Card>
 
       <Card
         title="Course offerings"

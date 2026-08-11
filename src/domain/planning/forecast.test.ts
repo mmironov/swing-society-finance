@@ -173,3 +173,118 @@ describe("forecastSeason", () => {
     expect(season.expenseByCategory.MARKETING).toBe(50_000);
   });
 });
+
+describe("shared-intake offerings", () => {
+  /**
+   * Intermediate: students buy a subscription from the school and choose what
+   * to attend, so this course has no expected sales of its own. Its revenue is
+   * the slice of the season pool the operator assigned to it.
+   */
+  const INTERMEDIATE: OfferingPlanInput = {
+    offeringId: 2,
+    courseName: "Lindy Hop — Intermediate",
+    classesPerWeek: 1,
+    weeks: 14,
+    capacity: 25,
+    expectedStudents: 20,
+    expectedSales: [],
+    teacherAssignments: [{ teacherId: 1, classes: 14, ratePerClassCents: 5000 }],
+    studio: { minutesPerClass: 120, hourlyRateCents: 2000 },
+    intakeMode: "SHARED",
+    poolShareBp: 4000,
+    allocatedPoolCents: 240_000,
+  };
+
+  it("takes its revenue from the allocated pool slice", () => {
+    const result = forecastOffering(INTERMEDIATE, PRODUCTS);
+
+    expect(result.revenue.totalCents).toBe(240_000);
+    expect(result.intakeMode).toBe("SHARED");
+    expect(result.poolShareBp).toBe(4000);
+    // No per-product breakdown here — those sales belong to the season plan.
+    expect(result.revenue.lines).toEqual([]);
+  });
+
+  it("still computes costs, contribution and break-even normally", () => {
+    const result = forecastOffering(INTERMEDIATE, PRODUCTS);
+
+    expect(result.contribution.teacherCostCents).toBe(70_000);
+    expect(result.contribution.studioCostCents).toBe(56_000);
+    expect(result.contribution.contributionProfitCents).toBe(114_000);
+    expect(result.breakEven.breakEvenStudents).toBeGreaterThan(0);
+  });
+
+  it("ignores any expected sales left on a shared offering", () => {
+    // Switching a course from dedicated to shared must not double-count: its
+    // old per-offering sales rows are no longer its revenue.
+    const withStaleSales = { ...INTERMEDIATE, expectedSales: [{ productId: 1, quantity: 99 }] };
+
+    expect(forecastOffering(withStaleSales, PRODUCTS).revenue.totalCents).toBe(240_000);
+  });
+
+  it("treats a missing allocation as zero rather than throwing", () => {
+    const unallocated = { ...INTERMEDIATE, allocatedPoolCents: undefined };
+
+    expect(forecastOffering(unallocated, PRODUCTS).revenue.totalCents).toBe(0);
+  });
+
+  it("leaves poolShareBp null on a dedicated offering", () => {
+    expect(forecastOffering(BEGINNERS, PRODUCTS).poolShareBp).toBeNull();
+    expect(forecastOffering(BEGINNERS, PRODUCTS).intakeMode).toBe("DEDICATED");
+  });
+});
+
+describe("forecastSeason with an incompletely allocated pool", () => {
+  const shared = (id: number, allocatedPoolCents: number) =>
+    forecastOffering(
+      {
+        offeringId: id,
+        courseName: `Course ${id}`,
+        classesPerWeek: 1,
+        weeks: 10,
+        capacity: 20,
+        expectedStudents: 10,
+        expectedSales: [],
+        teacherAssignments: [],
+        studio: null,
+        intakeMode: "SHARED",
+        allocatedPoolCents,
+        poolShareBp: 4000,
+      },
+      PRODUCTS,
+    );
+
+  it("counts unclaimed pool revenue in the season total", () => {
+    // Shares total 80%: €800 allocated, €200 left over on a €1,000 pool.
+    const result = forecastSeason([shared(1, 40_000), shared(2, 40_000)], [], {
+      unallocatedPoolCents: 20_000,
+    });
+
+    // The season expects €1,000 regardless of the operator finishing the split.
+    expect(result.revenueByCategory.COURSE_FEES).toBe(100_000);
+    expect(result.totalRevenueCents).toBe(100_000);
+    expect(result.unallocatedPoolCents).toBe(20_000);
+  });
+
+  it("keeps unclaimed revenue out of course contribution", () => {
+    const result = forecastSeason([shared(1, 40_000), shared(2, 40_000)], [], {
+      unallocatedPoolCents: 20_000,
+    });
+
+    // Contribution reflects only what courses actually claimed — otherwise a
+    // course would appear more profitable because of money it was not assigned.
+    expect(result.courseRevenueCents).toBe(80_000);
+    expect(result.courseContributionProfitCents).toBe(80_000);
+  });
+
+  it("is unchanged when the pool is fully allocated", () => {
+    const result = forecastSeason([shared(1, 50_000), shared(2, 50_000)], []);
+
+    expect(result.unallocatedPoolCents).toBe(0);
+    expect(result.revenueByCategory.COURSE_FEES).toBe(result.courseRevenueCents);
+  });
+
+  it("rejects a negative unallocated amount", () => {
+    expect(() => forecastSeason([], [], { unallocatedPoolCents: -1 })).toThrow(PlanningInputError);
+  });
+});

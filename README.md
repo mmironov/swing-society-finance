@@ -441,6 +441,36 @@ Without the flip, a column of numbers would mean "good" in one row and "bad" in 
 
 This is a reporting convention only; it never changes a stored amount.
 
+### Dedicated and shared course intakes
+
+Not every course sells its own subscriptions. Each offering has an **intake mode**:
+
+- **Dedicated** — students join *for that course*, so its own expected sales are its revenue. A
+  beginners intake works this way.
+- **Shared** — students buy a pass from the school ("two classes a week for two months") and then
+  choose what to attend, so the sale belongs to the season rather than to any one course. The
+  offering takes an operator-set percentage of the season pool instead.
+
+Shared sales are planned on the season planner, **by product and by month**. Month matters because
+the P&L is cash-basis: a September purchase wave and a November one are different months' revenue,
+and planning them separately is what lets the monthly forecast be compared with monthly actuals.
+
+Allocation is a percentage the operator types, deliberately not a formula. Nobody has attendance
+data at planning time, and a number someone chose is easier to argue with than one derived from
+invented assumptions.
+
+Three rules worth knowing:
+
+- **Allocation never loses a cent.** Percentages rarely divide evenly into cents, so the split uses
+  the largest-remainder method: floor every share, then give the leftover cents to whichever courses
+  were rounded down hardest. The parts always sum to exactly the whole.
+- **Unclaimed pool revenue still counts.** If shares total 97%, the missing 3% is money the school
+  still expects, so it counts towards season revenue — but towards no course's contribution, and the
+  planner says so rather than absorbing it.
+- **Courses cannot claim more than 100%.** Enforced on save, since it is a cross-row rule no
+  database constraint can express. The read path degrades rather than throwing if it ever sees an
+  over-allocated season, because a planner that fails to load is worse than one that reports it.
+
 ### Contribution, not net profit
 
 Course profitability subtracts only **direct** costs (teachers, studio). Marketing and administration
@@ -523,7 +553,9 @@ and the festival.
 - **Authentication is a single shared credential.** There are no user accounts, so there is no record
   of *who* made a change — only that it was made. Adequate for a few trusted operators; not adequate
   if you need accountability.
-- **Revenue is attributed to the offering the expected sale was entered against.** A subscription
+- **Shared-pool allocation is a percentage, not measured attendance.** It reflects what the operator
+  expects, not who actually turned up; the `subscriptions ↔ course_offerings` link exists for a
+  future attendance-weighted version. For dedicated intakes, a subscription
   covering several courses is not yet split between them. The data model supports a better split;
   the planner does not implement one.
 - **Single-user assumptions.** No optimistic locking; two people editing the same course plan at once
