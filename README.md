@@ -187,7 +187,17 @@ the volume. Set `min_machines_running = 1` if that ever annoys you.
 | Logs | `fly logs` |
 | Status | `fly status` |
 | Shell | `fly ssh console` |
-| Backup now | `fly ssh console -C "node /app/dist-scripts/backup.js"` |
+| Backup now | wake first, then `fly ssh console -C "node /app/dist-scripts/backup.js"` |
+
+> **`fly ssh` cannot reach a stopped machine.** Because the machine stops when idle, an SSH command
+> on an app nobody has used recently fails with *"app … has no started VMs"*. Wake it with an HTTP
+> request first — Fly's auto-start responds to those, not to SSH:
+>
+> ```bash
+> curl -fsS https://swing-society-finance.fly.dev/api/health
+> ```
+>
+> `fly deploy` does **not** need this; it starts machines itself.
 
 #### Backups on Fly
 
@@ -238,6 +248,7 @@ losing the volume but not against losing the account. Pulling an occasional copy
 at season close covers that:
 
 ```bash
+curl -fsS https://swing-society-finance.fly.dev/api/health   # wake the machine
 fly ssh console -C "node /app/dist-scripts/backup.js"
 fly ssh sftp get /data/backups/<filename> ./backups/<filename>
 ```
