@@ -1,0 +1,82 @@
+name: Backup
+
+# Scheduled backup of the production database.
+#
+# WHY THIS RUNS HERE RATHER THAN ON THE SERVER: fly.toml stops the machine when
+# idle, so an in-app scheduler would not fire, and a Fly volume attaches to one
+# machine at a time, so a separate scheduled machine cannot mount it either.
+# Triggering from outside is the only arrangement that actually works.
+#
+# The backup script itself does the real work — snapshot, verify, upload to
+# object storage. This workflow's job is to run it on a schedule and to fail
+# loudly when it did not do what it claims.
+
+on:
+  schedule:
+    # 02:30 UTC daily. GitHub runs scheduled jobs on a best-effort basis and may
+    # delay them under load; for a daily backup that is immaterial.
+    - cron: "30 2 * * *"
+  # Lets you run it by hand from the Actions tab — use this to test it now
+  # rather than waiting until tomorrow morning.
+  workflow_dispatch:
+
+# Never let two backups overlap. They would race on the same volume, and the
+# second would prune the first's output mid-write.
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  FLY_APP: swing-society-finance
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Wake the machine
+        # `fly ssh` cannot reach a stopped machine, and Fly's auto-start is
+        # triggered by an HTTP request to the service — not by SSH. /api/health
+        # is unauthenticated precisely so something without credentials can poll
+        # it, which makes it the natural wake-up call. It also confirms the
+        # database is readable before we bother taking a backup of it.
+        run: |
+          for attempt in $(seq 1 30); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' \
+              "https://${FLY_APP}.fly.dev/api/health" 2>/dev/null || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Machine awake and healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Machine did not report healthy within 150s — backup not attempted."
+          exit 1
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Take and verify the backup
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -o pipefail
+          output=$(fly ssh console --app "$FLY_APP" \
+            --command "node /app/dist-scripts/backup.js" 2>&1 | tee /dev/stderr)
+
+          # The script already exits non-zero when an upload fails, but assert on
+          # the output as well. Exit codes through `fly ssh console` are one more
+          # link that can quietly break, and a backup that ran without ever
+          # leaving the volume would otherwise show up as a green tick.
+          if ! echo "$output" | grep -q "Uploaded to object storage"; then
+            echo "::error::Backup did not reach object storage — the volume may hold the only copy."
+            exit 1
+          fi
+
+          if ! echo "$output" | grep -q "verified\."; then
+            echo "::error::Backup completed without passing verification."
+            exit 1
+          fi
+
+          echo "Backup verified and uploaded."

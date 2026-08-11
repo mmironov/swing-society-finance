@@ -244,6 +244,46 @@ fly ssh sftp get /data/backups/<filename> ./backups/<filename>
 
 Fly's automatic daily volume snapshots sit underneath all of this as a short-retention safety net.
 
+##### Scheduling it
+
+Upload is automatic; *triggering* is not. [`.github/workflows/backup.yml`](.github/workflows/backup.yml)
+runs the backup daily at 02:30 UTC from GitHub Actions.
+
+It runs there rather than on the server for a structural reason: the machine stops when idle, so an
+in-app scheduler would never fire, and a Fly volume attaches to one machine at a time, so a separate
+scheduled machine cannot mount it. Triggering from outside is the only arrangement that works.
+
+One-time setup — create an app-scoped token and give it to GitHub:
+
+```bash
+fly tokens create deploy --app swing-society-finance --expiry 8760h
+```
+
+Add the output as a repository secret named `FLY_API_TOKEN`
+(*Settings → Secrets and variables → Actions*), or:
+
+```bash
+gh secret set FLY_API_TOKEN
+```
+
+Then run it once by hand from the **Actions** tab (*Backup → Run workflow*) rather than waiting for
+the first scheduled run to find out whether it works.
+
+The workflow does two things worth knowing:
+
+- **It wakes the machine first**, by polling `/api/health` until it answers. `fly ssh` cannot reach a
+  stopped machine, and Fly's auto-start responds to HTTP requests rather than SSH — so without this
+  the job would fail on any night the app had been idle.
+- **It asserts on the output, not just the exit code.** A run that took a backup but never uploaded
+  it, or one where SSH returned an error instead of running anything, fails the job. An exit code
+  travelling through `fly ssh console` is one more link that can quietly break, and a backup that
+  never left the volume must not show up as a green tick.
+
+> **GitHub disables scheduled workflows in repositories with no activity for 60 days.** It emails you
+> first, and re-enabling is one click in the Actions tab — but if this repository goes quiet after
+> the season is set up, that is the realistic way backups stop without anyone noticing. Check the
+> Actions tab at season close.
+
 **Remote objects are never deleted by the script.** Local pruning respects `BACKUP_RETENTION`; the
 bucket grows until you add a lifecycle rule. Automatic deletion of off-site backups is not worth
 risking a bug in — at 160 KB a snapshot, years of daily backups cost pennies.
