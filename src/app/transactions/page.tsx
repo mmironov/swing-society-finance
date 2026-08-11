@@ -1,6 +1,5 @@
 import {
   Badge,
-  Button,
   Card,
   EmptyState,
   Kpi,
@@ -17,8 +16,8 @@ import { listActivities, listCategories } from "@/services/catalog";
 import { getDefaultSeason, isoToday, listSeasons } from "@/services/seasons";
 import { listTransactions, type TransactionFilters as Filters } from "@/services/transactions";
 
-import { deleteTransactionAction } from "./actions";
 import { TransactionFilters } from "./filters";
+import { RowActions } from "./row-actions";
 import { TransactionForm } from "./transaction-form";
 
 export const dynamic = "force-dynamic";
@@ -149,12 +148,11 @@ export default async function TransactionsPage({
                     <Money cents={transaction.amountCents} />
                   </Td>
                   <Td>
-                    <form action={deleteTransactionAction}>
-                      <input type="hidden" name="id" value={transaction.id} />
-                      <Button variant="danger" type="submit" className="px-2 py-1 text-xs">
-                        Delete
-                      </Button>
-                    </form>
+                    <RowActions
+                      id={transaction.id}
+                      label={transaction.description}
+                      amount={formatEur(transaction.amountCents)}
+                    />
                   </Td>
                 </tr>
               ))}

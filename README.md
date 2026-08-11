@@ -42,10 +42,252 @@ marker is cleared — see [Demo data](#demo-data).
 | `npm run db:generate` | Generate a migration after editing the schema |
 | `npm run db:migrate` | Apply pending migrations |
 | `npm run db:seed` | **Replaces all data** with the demo dataset |
+| `npm run db:init` | Production bootstrap: migrate + real reference data, idempotent |
+| `npm run db:backup` | Verified, timestamped snapshot of the database |
 | `npm run db:studio` | Drizzle Studio, to browse the database |
 
 The database file defaults to `./data/swing-society.db` and is gitignored. Override with
-`DATABASE_URL=/path/to/file.db`. Backing up the app means copying that one file.
+`DATABASE_URL=/path/to/file.db`.
+
+Copy `.env.example` to `.env.local` for local configuration; `.env*` is gitignored.
+
+---
+
+## Security
+
+The whole application sits behind HTTP Basic authentication, implemented in [`src/proxy.ts`](src/proxy.ts).
+One file covers every route, every server action and every asset — there is no session store, no user
+table and no password reset flow.
+
+```bash
+AUTH_USER=swing
+AUTH_PASSWORD=$(openssl rand -base64 24)
+```
+
+Three behaviours worth knowing:
+
+- **Development stays open.** With both variables unset and `NODE_ENV != production`, there is no
+  login prompt, so `npm run dev` needs no setup.
+- **Production fails closed.** With them unset in production the app returns `503` and serves
+  nothing. Forgetting to configure credentials cannot silently expose financial data.
+- **Credentials are compared in constant time**, using SHA-256 digests and `timingSafeEqual`, with
+  both the username and password always checked so timing cannot reveal a correct username alone.
+
+> ⚠ **Basic auth is base64-encoded, not encrypted. Deploy only behind TLS.** Over plain HTTP the
+> credentials are readable by anyone on the network path. Terminate TLS at a reverse proxy
+> (Caddy does it automatically) or a load balancer.
+
+This is deliberately the simplest thing that works for a handful of operators. If Swing Society ever
+needs per-user permissions or an audit trail of who changed what, **replace it wholesale rather than
+growing it**.
+
+---
+
+## Backups
+
+The entire business sits in one SQLite file, so backups are not optional.
+
+```bash
+npm run db:backup
+```
+
+Each run writes a timestamped snapshot to `backups/`, keeps the most recent 14, and — critically —
+**verifies what it wrote**: it reopens the file, runs `PRAGMA integrity_check`, and confirms the
+application tables are readable. A snapshot that fails verification is deleted rather than left to
+look like protection.
+
+Do not simply `cp` the database file while the app is running. It runs in WAL mode, so recent writes
+live in a separate `-wal` file and a plain copy can capture a torn or stale snapshot. The script uses
+SQLite's online backup API, which is consistent and safe against a live database. It then folds the
+WAL into the snapshot so each backup is **one self-contained file** you can copy anywhere.
+
+Schedule it — daily at 02:30, keeping 30 days. In development:
+
+```bash
+30 2 * * * cd /path/to/swing-society-finance && BACKUP_RETENTION=30 /usr/local/bin/npm run db:backup >> /var/log/swing-backup.log 2>&1
+```
+
+In production the same script runs inside the container. Where its output lands differs by target:
+
+- **Docker Compose** — writes to `backups/` bind-mounted from the host, so snapshots are already off
+  the container and on a filesystem you control:
+  ```bash
+  30 2 * * * cd /path/to/swing-society-finance && /usr/bin/docker compose exec -T app node /app/dist-scripts/backup.js >> /var/log/swing-backup.log 2>&1
+  ```
+- **Fly.io** — writes to `/data/backups`, which is *the same volume as the database*. Getting a copy
+  off the machine takes an extra step, and it matters: see
+  [Backups on Fly](#backups-on-fly).
+
+**To restore**, stop the app and put the snapshot in place. It is a complete database, not a diff:
+
+```bash
+# development
+cp backups/swing-society-2026-08-11T162528Z.db data/swing-society.db
+
+# production — the volume is only safely writable while nothing is using it
+docker compose stop app
+docker compose run --rm -v ./backups:/backups --entrypoint sh app \
+  -c "cp /backups/swing-society-2026-08-11T162528Z.db /data/swing-society.db"
+docker compose start app
+```
+
+`backups/` is gitignored. Copy it somewhere off the machine — a backup on the same disk as the
+original protects against mistakes, not hardware failure.
+
+---
+
+## Deployment
+
+Runs as a Docker container. The database lives on a volume, never in the image. Two supported
+targets: **Fly.io** (the deployed setup) and **Docker Compose** (any host you control).
+
+### Fly.io
+
+Configuration is in [`fly.toml`](fly.toml). One-time setup:
+
+```bash
+brew install flyctl
+fly auth login
+
+fly apps create swing-society-finance          # name must be globally unique
+fly volumes create swing_data --region fra --size 1
+
+# Credentials go in secrets, never in fly.toml — that file is committed to git.
+fly secrets set AUTH_USER=swing AUTH_PASSWORD="$(openssl rand -base64 24)"
+
+fly deploy
+```
+
+Afterwards, `fly deploy` alone ships a new version. TLS is terminated at Fly's edge and
+`force_https` redirects plain HTTP, which is what makes Basic auth safe here.
+
+> ⚠ **Never run more than one machine.** SQLite has a single writer and a Fly volume attaches to one
+> machine at a time. A second machine either fails to mount the volume or — worse, if given its own —
+> gives you two divergent copies of the finances that cannot be merged. Check with `fly status`; fix
+> with `fly scale count 1`.
+
+The machine stops when idle and starts on the next request (a couple of seconds), so cost is mostly
+the volume. Set `min_machines_running = 1` if that ever annoys you.
+
+| | |
+|---|---|
+| Logs | `fly logs` |
+| Status | `fly status` |
+| Shell | `fly ssh console` |
+| Backup now | `fly ssh console -C "node /app/dist-scripts/backup.js"` |
+
+#### Backups on Fly
+
+`BACKUP_DIR` points at `/data/backups` — the same volume as the database — so local snapshots alone
+would not survive losing that volume. Object storage closes that gap.
+
+Create a bucket and wire in the credentials it prints:
+
+```bash
+fly storage create                       # provisions a Tigris bucket
+fly secrets set \
+  S3_ENDPOINT=https://fly.storage.tigris.dev \
+  S3_BUCKET=<bucket-name> \
+  S3_ACCESS_KEY_ID=<key> \
+  S3_SECRET_ACCESS_KEY=<secret> \
+  S3_REGION=auto
+```
+
+Every backup is then uploaded **after** it passes verification, so an unusable snapshot is never
+shipped somewhere it is even harder to notice. If the upload fails, the run prints the provider's
+error, says plainly that this machine now holds the only copy, and **exits non-zero** so a cron job
+raises an alarm — a backup process that silently stops copying is indistinguishable from one that
+works.
+
+With no `S3_*` variables set, backups stay local and the script says so rather than implying safety.
+
+Remaining caveat worth knowing: Tigris lives inside your Fly account, so this protects against
+losing the volume but not against losing the account. Pulling an occasional copy to your own machine
+at season close covers that:
+
+```bash
+fly ssh console -C "node /app/dist-scripts/backup.js"
+fly ssh sftp get /data/backups/<filename> ./backups/<filename>
+```
+
+Fly's automatic daily volume snapshots sit underneath all of this as a short-retention safety net.
+
+**Remote objects are never deleted by the script.** Local pruning respects `BACKUP_RETENTION`; the
+bucket grows until you add a lifecycle rule. Automatic deletion of off-site backups is not worth
+risking a bug in — at 160 KB a snapshot, years of daily backups cost pennies.
+
+**To restore**, upload a snapshot and put it in place:
+
+```bash
+fly ssh sftp shell                       # then: put ./backups/<file> /data/restore.db
+fly ssh console -C "sh -c 'cp /data/restore.db /data/swing-society.db'"
+fly apps restart swing-society-finance
+```
+
+---
+
+### Docker Compose
+
+For any host you control — a VPS, a NAS, a machine at the studio.
+
+```bash
+cp .env.example .env          # then set AUTH_USER and AUTH_PASSWORD
+docker compose up -d --build
+```
+
+That is the whole procedure. On start the container applies migrations and inserts the reference
+data — the 11 categories, 4 courses, 8 activities and 7 subscription products — plus the Autumn 2026
+season if no season exists. Both steps are **idempotent and safe against live data**, so they run on
+every start and a deploy carrying a new migration needs no separate manual step.
+
+The result is an empty ledger: real reference data, no fictional transactions, and no demo banner.
+
+> **`db:migrate` alone is not enough.** A transaction requires a category, and the composite foreign
+> key means a migrated-but-unseeded database cannot accept a single row. `db:init` — which the
+> entrypoint runs for you — is what makes the database usable.
+
+#### TLS is not optional (Compose only — Fly handles this at its edge)
+
+`compose.yaml` publishes to `127.0.0.1:3000` deliberately. **Do not change that to `0.0.0.0` or
+publish port 3000 to the internet.** Basic auth is base64, not encryption; without TLS the password
+crosses the network in clear text on every request.
+
+Put a terminator in front. Caddy is two lines and obtains certificates automatically:
+
+```caddy
+swing.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+#### Upgrading
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+The volume is untouched by a rebuild. Take a backup first anyway if the release contains a migration
+— migrations are not reversible.
+
+#### Operating notes
+
+| | |
+|---|---|
+| Logs | `docker compose logs -f` |
+| Health | `docker compose ps` — reports `healthy` via `/api/health` |
+| Backup now | `docker compose exec -T app node /app/dist-scripts/backup.js` |
+| Shell | `docker compose exec app sh` |
+
+Three deliberate safety behaviours, each verified:
+
+- **The container refuses to start** with `AUTH_USER`/`AUTH_PASSWORD` unset, rather than serving an
+  unprotected finance app. The error names the missing variables in the log.
+- **The application process runs as an unprivileged user** (`swing`, uid 1001). The entrypoint is
+  root only long enough to fix volume ownership, then drops privileges.
+- **`/api/health` is the only unauthenticated route.** It reports liveness and nothing else — no
+  figures, no counts, no configuration — and it queries the database, so a container whose volume
+  failed to mount reports unhealthy instead of falsely healthy.
 
 ---
 
@@ -206,8 +448,9 @@ and the festival.
 
 ## Known limitations
 
-- **No authentication.** Anyone who can reach the port can read and edit everything. Run it on a
-  trusted network, or put a reverse proxy with auth in front of it before exposing it.
+- **Authentication is a single shared credential.** There are no user accounts, so there is no record
+  of *who* made a change — only that it was made. Adequate for a few trusted operators; not adequate
+  if you need accountability.
 - **Revenue is attributed to the offering the expected sale was entered against.** A subscription
   covering several courses is not yet split between them. The data model supports a better split;
   the planner does not implement one.
@@ -222,14 +465,27 @@ and the festival.
 
 ## Possible next steps
 
-Attendance and attendance-weighted revenue allocation · workshops, parties and Swing Buzz as first
-class entities with their own P&L · students and real subscription sales feeding actuals
+Accrual treatment for multi-month subscriptions, which currently distorts month-on-month comparison
+more than anything else here · attendance and attendance-weighted revenue allocation · workshops,
+parties and Swing Buzz as first class entities with their own P&L · students and real subscription
+sales feeding actuals
 automatically · cash-flow timing · scenario comparison in the planner · CSV import from the bank ·
 authentication.
 
 ---
 
 ## Testing
+
+Three of the tests exercise Signature V4 against a **real S3 server** rather than a mock, because a
+mock would accept an invalid signature and prove nothing. They skip themselves when no server is
+reachable, so `npm test` works offline. To include them:
+
+```bash
+docker run -d --name minio-test -p 127.0.0.1:9100:9000 \
+  -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 \
+  minio/minio server /data
+```
+
 
 129 unit tests covering the calculation layer and the database constraints.
 

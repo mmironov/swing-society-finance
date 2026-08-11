@@ -16,6 +16,11 @@ import { eurosToCents } from "@/domain/money";
 import { db } from "./client";
 import { runMigrations } from "./migrate";
 import {
+  REFERENCE_ACTIVITIES,
+  REFERENCE_COURSES,
+  REFERENCE_SUBSCRIPTION_PRODUCTS,
+} from "./reference-data";
+import {
   activities,
   appMeta,
   categories,
@@ -83,12 +88,7 @@ export function seed() {
 
     const courseRows = db
       .insert(courses)
-      .values([
-        { name: "Swing Dance for Beginners", sortOrder: 10, description: "Entry-level swing course" },
-        { name: "Lindy Hop — Intermediate", sortOrder: 20, description: "For dancers with a season behind them" },
-        { name: "Lindy Hop — Advanced", sortOrder: 30, description: "Fast tempos and improvisation" },
-        { name: "Jazz", sortOrder: 40, description: "Solo jazz technique and routines" },
-      ])
+      .values(REFERENCE_COURSES.map((course) => ({ ...course })))
       .returning()
       .all();
     const course = (name: string) => {
@@ -101,16 +101,13 @@ export function seed() {
 
     const activityRows = db
       .insert(activities)
-      .values([
-        { name: "Beginners", kind: "COURSE" as const, courseId: course("Swing Dance") },
-        { name: "Intermediate", kind: "COURSE" as const, courseId: course("Lindy Hop — Intermediate") },
-        { name: "Advanced", kind: "COURSE" as const, courseId: course("Lindy Hop — Advanced") },
-        { name: "Jazz", kind: "COURSE" as const, courseId: course("Jazz") },
-        { name: "Workshop", kind: "WORKSHOP" as const },
-        { name: "Party", kind: "PARTY" as const },
-        { name: "Swing Buzz", kind: "FESTIVAL" as const },
-        { name: "General", kind: "GENERAL" as const },
-      ])
+      .values(
+        REFERENCE_ACTIVITIES.map((entry) => ({
+          name: entry.name,
+          kind: entry.kind,
+          courseId: entry.courseName === null ? null : course(entry.courseName),
+        })),
+      )
       .returning()
       .all();
     const activity = (name: string) => activityRows.find((a) => a.name === name)?.id ?? null;
@@ -119,15 +116,7 @@ export function seed() {
 
     const productRows = db
       .insert(subscriptionProducts)
-      .values([
-        { name: "1 class/week — 1 month", classesPerWeek: 1, durationMonths: 1, priceCents: eurosToCents(40), sortOrder: 10 },
-        { name: "1 class/week — 2 months", classesPerWeek: 1, durationMonths: 2, priceCents: eurosToCents(60), sortOrder: 20 },
-        { name: "2 classes/week — 1 month", classesPerWeek: 2, durationMonths: 1, priceCents: eurosToCents(60), sortOrder: 30 },
-        { name: "2 classes/week — 2 months", classesPerWeek: 2, durationMonths: 2, priceCents: eurosToCents(100), sortOrder: 40 },
-        { name: "Unlimited — 1 month", classesPerWeek: null, durationMonths: 1, priceCents: eurosToCents(80), isUnlimited: true, sortOrder: 50 },
-        { name: "Unlimited — 2 months", classesPerWeek: null, durationMonths: 2, priceCents: eurosToCents(120), isUnlimited: true, sortOrder: 60 },
-        { name: "Single class", classesPerWeek: 1, durationMonths: null, priceCents: eurosToCents(20), kind: "SINGLE_CLASS" as const, sortOrder: 70 },
-      ])
+      .values(REFERENCE_SUBSCRIPTION_PRODUCTS.map((product) => ({ ...product })))
       .returning()
       .all();
     const product = (name: string) => {

@@ -1,0 +1,51 @@
+# Swing Society Finance — production deployment.
+#
+#   cp .env.example .env    # then fill in AUTH_USER / AUTH_PASSWORD
+#   docker compose up -d --build
+#
+# ⚠ This publishes plain HTTP on 127.0.0.1 only. Basic auth is NOT encrypted, so
+# do not expose port 3000 to a network directly — put TLS in front of it. See
+# the "Deployment" section of the README.
+
+services:
+  app:
+    build: .
+    image: swing-society-finance
+    restart: unless-stopped
+
+    environment:
+      # Required. The container refuses to start without them.
+      AUTH_USER: ${AUTH_USER:?set AUTH_USER in .env}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?set AUTH_PASSWORD in .env}
+      # Paths inside the container; both are mount points declared below.
+      DATABASE_URL: /data/swing-society.db
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-30}
+
+    ports:
+      # Bound to loopback deliberately. Change to "443:3000" ONLY behind a TLS
+      # terminator; exposing this directly sends the password in clear text.
+      - "127.0.0.1:3000:3000"
+
+    volumes:
+      # The database. A named volume survives `docker compose down` and image
+      # rebuilds — everything written inside the container itself does not.
+      - swing-data:/data
+      # Backups bind-mounted to the host so they can be copied off the machine
+      # without entering the container. A backup that only exists inside the
+      # same Docker volume as the database is not really a backup.
+      - ./backups:/backups
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  swing-data:

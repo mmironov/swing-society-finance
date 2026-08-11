@@ -61,31 +61,38 @@ function buildConditions(filters: TransactionFilters): SQL[] {
   return conditions;
 }
 
-export function listTransactions(filters: TransactionFilters = {}, limit?: number): TransactionRow[] {
-  const conditions = buildConditions(filters);
+/** Shared column list so single-row and list reads cannot drift apart. */
+const TRANSACTION_COLUMNS = {
+  id: financialTransactions.id,
+  date: financialTransactions.date,
+  type: financialTransactions.type,
+  categoryId: financialTransactions.categoryId,
+  categoryCode: categories.code,
+  categoryName: categories.name,
+  categorySortOrder: categories.sortOrder,
+  activityId: financialTransactions.activityId,
+  activityName: activities.name,
+  seasonId: financialTransactions.seasonId,
+  seasonName: seasons.name,
+  description: financialTransactions.description,
+  amountCents: financialTransactions.amountCents,
+  paymentMethod: financialTransactions.paymentMethod,
+  status: financialTransactions.status,
+} as const;
 
-  const query = db
-    .select({
-      id: financialTransactions.id,
-      date: financialTransactions.date,
-      type: financialTransactions.type,
-      categoryId: financialTransactions.categoryId,
-      categoryCode: categories.code,
-      categoryName: categories.name,
-      categorySortOrder: categories.sortOrder,
-      activityId: financialTransactions.activityId,
-      activityName: activities.name,
-      seasonId: financialTransactions.seasonId,
-      seasonName: seasons.name,
-      description: financialTransactions.description,
-      amountCents: financialTransactions.amountCents,
-      paymentMethod: financialTransactions.paymentMethod,
-      status: financialTransactions.status,
-    })
+function selectTransactions() {
+  return db
+    .select(TRANSACTION_COLUMNS)
     .from(financialTransactions)
     .innerJoin(categories, eq(financialTransactions.categoryId, categories.id))
     .leftJoin(activities, eq(financialTransactions.activityId, activities.id))
-    .leftJoin(seasons, eq(financialTransactions.seasonId, seasons.id))
+    .leftJoin(seasons, eq(financialTransactions.seasonId, seasons.id));
+}
+
+export function listTransactions(filters: TransactionFilters = {}, limit?: number): TransactionRow[] {
+  const conditions = buildConditions(filters);
+
+  const query = selectTransactions()
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(financialTransactions.date), desc(financialTransactions.id));
 
@@ -178,5 +185,5 @@ export function deleteTransaction(id: number): void {
 }
 
 export function getTransaction(id: number): TransactionRow | undefined {
-  return listTransactions().find((row) => row.id === id);
+  return selectTransactions().where(eq(financialTransactions.id, id)).get();
 }

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { parseEurosToCents } from "@/domain/money";
 import type { TransactionType } from "@/domain/categories";
@@ -87,7 +88,10 @@ export async function updateTransactionAction(
   revalidatePath("/");
   revalidatePath("/reports");
   revalidatePath("/forecast");
-  return {};
+
+  // Deliberately OUTSIDE the try block: redirect() signals by throwing, so
+  // calling it inside would be caught above and reported as a save failure.
+  redirect("/transactions");
 }
 
 export async function deleteTransactionAction(formData: FormData): Promise<void> {

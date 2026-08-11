@@ -1,0 +1,61 @@
+# Fly.io deployment. See the "Deployment" section of the README for the runbook.
+#
+# ⚠ SINGLE MACHINE ONLY. SQLite allows one writer, and a Fly volume attaches to
+# one machine at a time. Never `fly scale count 2` — a second machine cannot
+# mount the volume and will fail, and if it somehow got its own volume you would
+# have two divergent copies of the finances with no way to merge them.
+
+app = "swing-society-finance"          # must be globally unique on Fly — change if taken
+primary_region = "fra"                 # Frankfurt; see `fly platform regions`
+
+[build]
+
+[env]
+  # The volume mount point. NOT a path inside the image — anything written
+  # outside /data is lost when the machine is replaced on the next deploy.
+  DATABASE_URL = "/data/swing-society.db"
+  # Backups live on the same volume so they survive restarts and deploys. That
+  # protects against mistakes, NOT against losing the volume — see the README on
+  # copying them off the machine.
+  BACKUP_DIR = "/data/backups"
+  BACKUP_RETENTION = "30"
+  PORT = "3000"
+
+# AUTH_USER and AUTH_PASSWORD are deliberately NOT here. fly.toml is committed
+# to git; credentials go in `fly secrets set`, which stores them encrypted and
+# injects them as environment variables at runtime.
+
+[[mounts]]
+  source = "swing_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  # Redirects http:// to https:// at Fly's edge. This is what makes Basic auth
+  # safe to use here — without TLS the password crosses the network in clear.
+  force_https = true
+  auto_start_machines = true
+  # Stops the machine when idle and starts it on the next request, which is the
+  # bulk of the cost saving for a tool used a few times a week. Cold start is a
+  # couple of seconds. SQLite's WAL is crash-safe, and Fly signals the process
+  # before stopping it, so an in-flight write is not at risk.
+  auto_stop_machines = "stop"
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    # Hits the one unauthenticated route. Fly ignores the Dockerfile's
+    # HEALTHCHECK, so the check has to be declared here as well.
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Measured: rendering every page (dashboard charts, planner, reports) peaked
+  # at ~116 MB against a 512 MB limit. 512 MB is headroom for the ledger growing
+  # over several seasons, not a requirement — dropping to 256 MB would work today
+  # and costs less, at a thinner margin.
+  memory = "512mb"
