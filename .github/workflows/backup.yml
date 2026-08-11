@@ -57,16 +57,22 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Confirm flyctl is on PATH
+        # The action installs the binary as `flyctl`; the `fly` alias exists on
+        # a local install but NOT here. Failing at this step names the problem,
+        # instead of surfacing as a bare exit code 127 from the step below.
+        run: flyctl version
+
       - name: Take and verify the backup
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -o pipefail
-          output=$(fly ssh console --app "$FLY_APP" \
+          output=$(flyctl ssh console --app "$FLY_APP" \
             --command "node /app/dist-scripts/backup.js" 2>&1 | tee /dev/stderr)
 
           # The script already exits non-zero when an upload fails, but assert on
-          # the output as well. Exit codes through `fly ssh console` are one more
+          # the output as well. Exit codes through `flyctl ssh console` are one more
           # link that can quietly break, and a backup that ran without ever
           # leaving the volume would otherwise show up as a green tick.
           if ! echo "$output" | grep -q "Uploaded to object storage"; then
